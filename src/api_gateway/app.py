@@ -213,6 +213,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "https://scamintelli.mysterysd.in",
+        "https://scamintelligence.online",
         "http://localhost:3000",
         "http://localhost:8000",
     ],
