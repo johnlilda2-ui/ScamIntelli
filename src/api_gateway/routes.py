@@ -33,6 +33,7 @@ from src.agent_controller.strategy import (
     should_trigger_callback,
 )
 from src.agent_controller.agent_state import generate_agent_notes
+from src.agent_controller.question_engine import IntelligenceExtractionPlanner
 from src.callback_worker.guvi_callback import send_guvi_callback
 from src.config import get_settings
 from src.intelligence_extractor.extractor import extract_all_intelligence
@@ -53,6 +54,7 @@ from src.resilience.circuit_breaker import CircuitBreakerRegistry, CircuitOpenEr
 from src.resilience.backpressure import BackpressureController
 from src.scam_detector.hybrid_engine import HybridScamDetectionEngine
 from src.scam_detector.training_pipeline import get_training_pipeline
+from src.scam_detector.scam_types import detect_scam_category
 from src.scam_detector.data_generator import generate_training_data
 from src.security.tamper_proof import (
     TamperProofMiddleware,
@@ -88,6 +90,81 @@ def _intelligence_to_public(intel: ExtractedIntelligence) -> dict:
         "employeeIds": intel.employee_ids,
         "namesMentioned": intel.names_mentioned,
     }
+def _build_verification_checklist(scam_category, intelligence: ExtractedIntelligence) -> list[dict]:
+    """Return safe, user-facing checks derived from ScamIntelli's extraction priorities.
+
+    These are verification steps for the recipient of a suspicious message, not
+    prompts for engaging or impersonating a scammer.
+    """
+    strategy = IntelligenceExtractionPlanner.get_extraction_strategy(
+        scam_category, 1, intelligence
+    )
+    target_labels = {
+        "phone_numbers": (
+            "Sender contact",
+            "Verify the phone number independently using the organization's official website or app. Do not call a number supplied only by the message.",
+        ),
+        "upi_ids": (
+            "Payment identity",
+            "Check the UPI ID or payment recipient against an independently verified official source. Do not send money just to test it.",
+        ),
+        "phishing_links": (
+            "Links and websites",
+            "Do not use the message link. Open the organization's official app or type its official website address yourself and check the claim there.",
+        ),
+        "bank_accounts": (
+            "Bank/payment details",
+            "Do not transfer money to verify an account. Confirm any payment details through an official channel you found independently.",
+        ),
+        "email_addresses": (
+            "Email identity",
+            "Check whether the sender's address uses the organization's real domain, then verify the claim through an official contact channel.",
+        ),
+        "organization_names": (
+            "Organization identity",
+            "Identify the organization being claimed and verify the message using contact details published on its official website.",
+        ),
+        "employee_ids": (
+            "Employee identity",
+            "Do not rely on an employee ID in the message. Verify the person through the organization's official support or directory.",
+        ),
+        "case_ids": (
+            "Reference number",
+            "Use the reference number only as a lookup clue. Verify it with the organization through an independently found official channel.",
+        ),
+        "order_numbers": (
+            "Order/reference details",
+            "Check the order or reference number inside the official service or app instead of following links or contact details in the message.",
+        ),
+        "addresses": (
+            "Physical organization details",
+            "Verify the claimed office or branch address using the organization's official site or another trusted source.",
+        ),
+        "names_mentioned": (
+            "Person identity",
+            "Treat names in the message as unverified. Confirm the person's role through an independently verified official contact.",
+        ),
+    }
+    targets = [strategy.get("primary_target"), *(strategy.get("secondary_targets") or [])]
+    checklist = []
+    seen = set()
+    for target in targets:
+        if not target or target in seen or target not in target_labels:
+            continue
+        seen.add(target)
+        title, detail = target_labels[target]
+        checklist.append({"title": title, "detail": detail})
+        if len(checklist) >= 4:
+            break
+
+    if not checklist:
+        checklist.append({
+            "title": "Verify independently",
+            "detail": "Do not send money, OTPs, passwords, recovery codes, or identity documents. Verify the claim through a trusted official source.",
+        })
+    return checklist
+
+
 _middleware = TamperProofMiddleware()
 _callback_circuit = CircuitBreakerRegistry.get("callback", failure_threshold=5, recovery_timeout=60)
 
@@ -114,12 +191,15 @@ async def analyze_message(request_body: AnalyzeRequest):
     intelligence = await extract_all_intelligence(message, ExtractedIntelligence())
     explanation = await HybridScamDetectionEngine.detect_with_explanation(message)
     detection = explanation["detection_result"]
+    scam_category = detect_scam_category(message)
+    verification_checklist = _build_verification_checklist(scam_category, intelligence)
 
     return {
         "status": "success",
         "scamDetected": bool(detection["is_scam"]),
         "confidence": float(detection["confidence"]),
         "riskLevel": detection["risk_level"],
+        "scamType": scam_category.value,
         "hasHardIndicators": bool(detection["has_hard_indicators"]),
         "intelligence": _intelligence_to_public(intelligence),
         "riskFactors": explanation["risk_factors"],
@@ -127,6 +207,7 @@ async def analyze_message(request_body: AnalyzeRequest):
         "topSignals": explanation["top_signals"],
         "detectionLayersUsed": explanation["detection_layers_used"],
         "scoreBreakdown": explanation["score_breakdown"],
+        "verificationChecklist": verification_checklist,
     }
 
 
