@@ -44,6 +44,7 @@ from src.models import (
     HoneypotSimpleResponse,
     MessageRequest,
     SessionResponse,
+    ExtractedIntelligence,
 )
 from src.scam_detector.ml_engine import MLScamDetector, PatternLearner
 from src.intelligence_extractor.network_analyzer import get_network_analyzer
