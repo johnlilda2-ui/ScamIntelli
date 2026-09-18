@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from pydantic import BaseModel, Field
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from src.agent_controller.strategy import (
@@ -64,6 +65,28 @@ from src.utils.validation import sanitize_input, validate_message, validate_sess
 settings = get_settings()
 logger = get_logger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["honeypot"])
+
+
+class AnalyzeRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=10000)
+
+
+def _intelligence_to_public(intel: ExtractedIntelligence) -> dict:
+    return {
+        "phoneNumbers": intel.phone_numbers,
+        "bankAccounts": intel.bank_accounts,
+        "upiIds": intel.upi_ids,
+        "phishingLinks": intel.phishing_links,
+        "emailAddresses": intel.email_addresses,
+        "suspiciousKeywords": intel.suspicious_keywords,
+        "caseIds": intel.case_ids,
+        "policyNumbers": intel.policy_numbers,
+        "orderNumbers": intel.order_numbers,
+        "organizationNames": intel.organization_names,
+        "addresses": intel.addresses,
+        "employeeIds": intel.employee_ids,
+        "namesMentioned": intel.names_mentioned,
+    }
 _middleware = TamperProofMiddleware()
 _callback_circuit = CircuitBreakerRegistry.get("callback", failure_threshold=5, recovery_timeout=60)
 
@@ -80,6 +103,30 @@ def _extract_client_info(request: Request) -> tuple:
     ip = request.client.host if request.client else "unknown"
     user_agent = request.headers.get("user-agent", "unknown")
     return ip, user_agent, dict(request.headers)
+
+
+@router.post("/analyze")
+async def analyze_message(request_body: AnalyzeRequest):
+    """Run ScamIntelli's standalone scam detection and intelligence extraction."""
+    message = sanitize_input(request_body.message)
+
+    intelligence = await extract_all_intelligence(message, ExtractedIntelligence())
+    explanation = await HybridScamDetectionEngine.detect_with_explanation(message)
+    detection = explanation["detection_result"]
+
+    return {
+        "status": "success",
+        "scamDetected": bool(detection["is_scam"]),
+        "confidence": float(detection["confidence"]),
+        "riskLevel": detection["risk_level"],
+        "hasHardIndicators": bool(detection["has_hard_indicators"]),
+        "intelligence": _intelligence_to_public(intelligence),
+        "riskFactors": explanation["risk_factors"],
+        "psychologicalTactics": explanation["psychological_tactics"],
+        "topSignals": explanation["top_signals"],
+        "detectionLayersUsed": explanation["detection_layers_used"],
+        "scoreBreakdown": explanation["score_breakdown"],
+    }
 
 
 @router.post("/message", response_model=AgentReply)
