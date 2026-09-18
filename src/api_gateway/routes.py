@@ -222,13 +222,6 @@ async def _honeypot_endpoint_inner(
     x_api_key: Optional[str] = None,
 ):
 
-
-async def _honeypot_endpoint_inner(
-    request_body: HoneypotRequest,
-    request: Request,
-    x_api_key: Optional[str] = None,
-):
-
     if isinstance(request_body.message, str):
         message_text = request_body.message
     elif isinstance(request_body.message, dict):
