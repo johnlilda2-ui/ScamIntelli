@@ -191,7 +191,7 @@ async def analyze_message(request_body: AnalyzeRequest):
     intelligence = await extract_all_intelligence(message, ExtractedIntelligence())
     explanation = await HybridScamDetectionEngine.detect_with_explanation(message)
     detection = explanation["detection_result"]
-    scam_category = detect_scam_category(message)
+    scam_category, _ = detect_scam_category(message, [])
     verification_checklist = _build_verification_checklist(scam_category, intelligence)
 
     return {
